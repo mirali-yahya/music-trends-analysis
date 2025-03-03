@@ -1,0 +1,400 @@
+---
+title: "Internationalization of the Music Industry"
+subtitle: "Analysis of musical trends' flow from national charts to global charts"
+author:
+- "Sophie Pöll"
+- "Mirali Yahyayev"
+- "Oleg Kushnir"
+- "Aysegul Polat"
+format: 
+    html:
+        code-fold: true # expandable code
+        table-of-contents: true # show table of contents
+        code-line-numbers: true # add line numbers to code chunks
+        message: false # don't print messages on website
+        warning: false # don't print warnings on website
+        df-print: paged # print long data.frames to paged table
+date: last-modified
+bibliography: references.bib
+---
+
+# Theoretical Background
+
+It is evident, the global music industry has experienced an unprecedented transformation in the last years. While the rise of streaming services and broadband internet have made it harder for emerging artists to break through or for labels to establish new talent, they have also made it easier for countries to share and access each other’s (local) music (@Way_Garcia-Gathright_Cramer_2020). Historically, the United States have been the dominant exporter of cultural products, especially music, since World War II (@Kim_2021). However, this trend is shifting. The share of English-language tracks in the Top 10K global tracks declined from 62.1% to 54.9% in just one year in 2023. U.S. listeners are increasingly engaging with non-English content, with the share of Spanish-language streaming in the U.S. rising to over 8%, up from 3.9% in 2021.
+
+Latin music, in particular, has been one of the fastest-growing genres in the U.S., with on-demand audio streams increasing by 24.1% in 2023 (@Luminate_2024). Latin music has thus become a key segment of North American consumption, creating a cycle that drives further growth in this region while fostering their local, authentic music culture (@IFPI_2024).
+
+Similarly, the consumption of Korean-language music has also seen a growth (@Luminate_2024). Historically, South Korea was a significant importer of global music, but it has now transformed into a major exporter, especially with the global rise of K-Pop. Beginning with Wonder Girls’ “Nobody” entering the Billboard Hot 100 in 2009 and Psy's “Gangnam Style” in 2012, the first YouTube video to reach one billion views, K-Pop has steadily gained international prominence (@Kim_2023). Today, K-Pop consistently appears in global charts, with six K-Pop artists / groups featured in the Global Artist Chart Top 20 in 2024.
+
+Countries like India and China also show significant potential for global music expansion. With India's vast, youthful population, the country is becoming an increasingly influential player in global pop culture. Similarly, China is investing in building its local talent pool and improving A&R capabilities, positioning itself to have a major impact on the global music scene (@IFPI_2024).
+
+
+## Research Questions
+
+There is limited research on identifying and quantifying which countries are the primary sources of influence in global music trends and how music from these countries reaches global charts. Experts suggest that regions like Latin America, Southeast Asia, and South Korea are becoming key drivers of global music consumption, but empirical evidence to support these claims, particularly in terms of their specific impact on global charts, remains scarce.
+
+There is a need for more in-depth analysis of the flow of musical trends from national charts to global charts, and how regional influences shape the global music landscape. Therefore, this research aims to answer the following questions: 
+
+ - RQ1. Which countries dominate the music industry based on streaming volume?
+
+ - RQ2. Which countries most frequently contribute songs to the global and other national charts? 
+
+ - RQ3. Which countries are most central to the flow of music? 
+
+# Analysis
+```{r}
+library(dplyr)
+library(gt)
+library(arrow)
+library(ggplot2)
+library(forcats)
+library(scales)
+library(igraph)
+library(ggraph)
+library(countrycode)
+
+### Weekly Top 200 2024
+top200 <- read_parquet("C:/Users/HP Pavilion/Downloads/weekly_top_200_2024.parquet")
+# top200 <- read_parquet(file.choose())  # You can remove this if you're already specifying the file path
+
+### Songs Meta 2024
+meta <- read_parquet("C:/Users/HP Pavilion/Downloads/song_meta_2024.parquet")
+# meta <- read_parquet(file.choose())  # Same as above, no need for file.choose() if you have a path
+
+
+# Ensure the 'week_date' column is in Date format (from 'top200' dataset)
+top200$week_date <- as.Date(top200$week_date)
+
+# Ensure the 'release_date' column is in Date format (from 'meta' dataset)
+meta$release_date <- as.Date(meta$release_date)
+
+# Full join the datasets by 'track_id'
+bigset <- full_join(top200, meta, by = "track_id")
+
+# Check the first few rows to ensure the merge was successful
+head(bigset)
+```
+
+Let's see which countries are in our dataset
+
+```{r}
+# List the unique countries in the 'country' column
+unique_countries <- unique(bigset$country)
+
+# View the list of unique countries
+unique_countries
+```
+
+Now, we can explore which countries are biggest music markets
+
+```{r}
+# Calculate total streams per country
+country_streams <- bigset%>%
+  group_by(country) %>%
+  summarise(total_streams = sum(streams, na.rm = TRUE)) %>%
+  arrange(desc(total_streams))
+
+# Display the ranked list of countries based on total streams
+ranked_countries <- country_streams
+
+# Print the ranked list
+print(ranked_countries)
+```
+
+We can show this table in histogram for top 10 countries (There will be 11 data because "Global" is counted as 1st place. So, we will show dataset for top 10 countries plus "Global". So, 11 in total)
+
+```{r}
+top11_countries <- country_streams %>%
+  top_n(11, total_streams)
+
+ggplot(top11_countries, aes(x = reorder(country, total_streams), y = total_streams / 1e6, fill = ifelse(total_streams == max(total_streams), "red", "grey"))) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c("red" = "red", "grey" = "grey")) +  # Define colors
+  scale_y_continuous(breaks = seq(0, max(top11_countries$total_streams) / 1e6, by = 10000)) +  # Add ticks every 10M
+  labs(title = "Top 10 Countries (incl. Global) by Total Streams",
+       x = "Country",
+       y = "Total Streams (in Millions)") +
+  theme_minimal() +
+  theme(legend.position = "none")  # Remove legend
+```
+
+As we see, US has the biggest portion in the world music industry. Total streams in US is approximately 15.000 higher than total streams of the second top country, Mexico.
+
+## Biggest songs of each country
+
+```{r}
+top11_country_songs <- bigset %>%
+  filter(country %in% top11_countries$country) %>%
+  group_by(country, track_name) %>%
+  summarise(total_streams = sum(streams, na.rm = TRUE)) %>%
+  arrange(country, desc(total_streams)) %>%
+  group_by(country) %>%
+  slice(1) %>%
+  ungroup()
+
+# Print the list of most streamed songs in the top 10 countries
+print(top11_country_songs)
+```
+
+Histogram for the most streamed song in each top country
+
+```{r}
+ggplot(top11_country_songs, aes(x = reorder(country, total_streams), y = total_streams / 1e6, fill = track_name)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = round(total_streams / 1e6, 1)),  # Add labels showing total streams
+            vjust = -0.5,  # Position text above bars
+            size = 4) +  # Adjust text size
+  scale_y_continuous(breaks = seq(0, max(top11_country_songs$total_streams) / 1e6, by = 100)) +  # Set y-axis scale every 100M
+  labs(title = "Most Streamed Songs in Top 10 Countries and Global",
+       y = "Total Streams (in Millions)",  
+       x = "Country",  
+       fill = "Track Name") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 12),  
+        axis.text.y = element_text(size = 12))
+```
+
+As it is shown in the chart, the most popular song in US market has been streamed significantly more than other popular songs in the top countries
+
+## Most Globally Streamed Song Each Week
+
+```{r}
+top_songs_each_week <- bigset %>% 
+  filter(country == "GLOBAL", rank == 1) %>% 
+  group_by(week_date) %>% 
+  select(-rank, -track_id, -week_date, -release_date, -streams, -total_streams)
+
+top_songs_each_week
+
+```
+
+We can see the list of Globally top song each week. Now, we can analyze how many weeks these songs have been leader in Global market
+
+```{r}
+top_songs_each_week %>% 
+  group_by(track_name) %>% 
+  count(track_name) %>% 
+  arrange(desc(n))
+```
+
+As shown in the table, most globally popular song has been "Die With A Smile". However, interesting fact is that this song is not most streamed song according to the result of "Biggest songs of each country".
+
+## Global Top 200 ranked
+
+```{r}
+# Step 1: Filter for Global songs
+global_songs <- bigset %>%
+  filter(country == "GLOBAL")  # Only select rows where the country is 'GLOBAL'
+
+# Step 2: Group by track_id and track_name, sum streams, and count weeks in the global charts
+global_songs_ranked <- global_songs %>%
+  group_by(track_id, track_name) %>%
+  summarise(
+    total_streams = sum(streams, na.rm = TRUE),  # Sum the streams for each song
+    weeks_in_chart = n_distinct(week_date),  # Count the number of distinct weeks the song was in the chart
+    .groups = "drop"  # Drop grouping after summarising
+  ) %>%
+  arrange(desc(total_streams)) %>% # Sort by total streams in descending order
+  select(-track_id)
+
+print (n=15, global_songs_ranked)
+```
+
+Despite the fact that "Birds of Feather" has been 3 times top song globally, this song has most total streams in 2024. Which means, even though the song has been most streamed song worldwide, the song can be listed top for few weeks. Reason for this is that the song was very popular for few weeks, but later the streams declines fast and the song looses its top performance worldwide.
+
+## Where the track first appeared 
+
+Now, we can see where was the place the song appeared first before going global.
+
+```{r}
+
+# Step 1: Extract the earliest national chart appearance for each song
+first_appearance <- bigset %>%
+  filter(country != "GLOBAL") %>%
+  group_by(track_id) %>%
+  filter(week_date == min(week_date)) %>%
+  ungroup()
+
+# Step 2: Create a list showing the first week and countries where each song appeared
+first_week_countries <- first_appearance %>%
+  group_by(track_id, track_name, week_date) %>%
+  summarise(countries = paste(unique(country), collapse = ", ")) %>%
+  ungroup()
+
+# Step 3: Filter for songs that later appear in the global chart
+global_appearance <- bigset %>%
+  filter(country == "GLOBAL") %>%
+  select(track_id, week_date)
+
+# Step 4: Join the first appearance with global chart data and filter for valid entries
+first_to_global <- first_appearance %>%
+  inner_join(global_appearance, by = "track_id", suffix = c("_national", "_global"), relationship = "many-to-many") %>%
+  filter(week_date_national < week_date_global)
+
+# Step 5: Count the frequency of each country being the first to chart a song before it reaches the global charts
+country_frequency <- first_to_global %>%
+  group_by(country) %>%
+  summarise(frequency = n()) %>%
+  arrange(desc(frequency))
+
+# Output the ranked list of countries
+print(country_frequency)
+```
+
+Now, we can visualize the results
+
+```{r}
+top_20_countries <- country_frequency %>%
+  arrange(desc(frequency)) %>%
+  head(20)
+
+# Create the bar chart with flipped axis
+ggplot(top_20_countries, aes(x = reorder(country, -frequency), y = frequency, 
+                             fill = country == country[1])) +
+  geom_bar(stat = 'identity', show.legend = FALSE) +
+  scale_y_continuous(
+    limits = c(0, max(top_20_countries$frequency) + 500),  # Start y-axis at 3000
+    expand = c(0, 0), 
+    labels = label_comma()
+  ) +
+  scale_fill_manual(values = c('darkgrey', 'red')) +  # Highlight the max country
+  geom_text(aes(label = frequency), 
+            vjust = -0.5, 
+            size = 3, 
+            color = "white") +
+  labs(title = "Top 20 Countries with the Highest Frequency of Global Hits First Appearing in Their Charts",
+       x = "Country", y = "Frequency") +
+  theme_bw() +
+  theme(
+    plot.title = element_text(size = 14, hjust = 0.5),
+    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels
+    axis.title.y = element_blank()
+  )
+
+```
+
+From the result, we can see that Canada hosts many songs which has been globally popular later. However, it is good to emphasis that this result can be misleading too, since there was a problem with the data set. In the data set, for some songs, the first appeared country is more than one. For example, some songs appear in many countries simultaneously on the day of release. So, it is most probable that some songs appeared in Canada and US at the same time, so each country gets count for this.
+
+## Average Days To Go Global
+
+```{r}
+bigset <- bigset %>%
+  mutate(week_date = as.Date(week_date),
+         release_date = as.Date(release_date))
+
+# Identify global chart entries
+global_charts <- bigset %>%
+  filter(country == "GLOBAL") %>%
+  select(track_id, global_week_date = week_date)
+
+# Merge with original data to find national chart entries
+national_to_global <- bigset %>%
+  inner_join(global_charts, by = "track_id") %>%
+  filter(country != "GLOBAL") %>%
+  mutate(days_to_global = as.numeric(global_week_date - week_date))
+
+# Calculate average time lag for each country
+country_avg_lag <- national_to_global %>%
+  group_by(country) %>%
+  summarise(avg_days_to_global = mean(days_to_global, na.rm = TRUE)) %>%
+  arrange(avg_days_to_global)
+
+# Lollipop chart
+# Select Top 10, Middle 10, and Bottom 10 countries
+country_filtered <- country_avg_lag %>%
+  arrange(avg_days_to_global) %>%
+  mutate(rank = row_number()) %>%
+  filter(rank <= 15 | rank > (n() - 15) | (rank > (n()/2 - 5) & rank <= (n()/2 + 5)))
+
+# Create the lollipop chart
+ggplot(country_filtered, aes(x = reorder(country, avg_days_to_global), y = avg_days_to_global, color = avg_days_to_global)) +
+  geom_segment(aes(yend = 0, xend = country), color = "grey") +  # Lollipop stick
+  geom_point(size = 4) +  # Lollipop head
+  scale_color_gradient(low = "blue", high = "pink") +  # Gradient color
+  scale_y_continuous(breaks = seq(-55, 30, by = 5)) +  # Set y-axis breaks every 5 units
+  labs(title = "Average Days it takes a Song from National to Global Charts",
+       x = "Country",
+       y = "Days on Average",
+       color = "Days to Global") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for better readability
+
+```
+
+
+```{r}
+print(n=72, country_avg_lag)
+```
+
+From the table and lollipop chart, the countries with minus days are the countries which did not produce any global song. So, these countries are represented on the left side of the lollipop chart.
+
+The countries with the highest going global performance are represented in the middle of lollipop chart. According to the table, a song from US takes 0.4 days to be popular in global. This is the top performance in the table.
+
+## Closeness Centrality
+
+Let's see which country is the most central country in the network
+
+```{r}
+first_appearances <- bigset %>%
+    filter(country != "GLOBAL") %>%
+    group_by(track_id, country) %>%
+    summarize(first_week = min(week_date), .groups = 'drop')
+  
+  # Step 2: Identify country-to-country transitions
+  transitions <- first_appearances %>%
+    group_by(track_id) %>%
+    arrange(first_week) %>%
+    mutate(next_country = lead(country)) %>%
+    filter(!is.na(next_country)) %>%
+    ungroup() %>%
+    count(country, next_country, name = "weight")
+  
+  # Step 3: Build the influence network
+  g <- graph_from_data_frame(transitions, directed = TRUE)
+  
+  # Step 4: Calculate closeness centrality
+  closeness_centrality <- closeness(g, mode = "out", normalized = TRUE)
+  V(g)$closeness <- closeness_centrality
+
+  # Step 4.1: Create a ranked dataframe of closeness centrality scores
+  closeness_df <- data.frame(
+    country = V(g)$name,
+    closeness = closeness_centrality
+  ) %>%
+    arrange(closeness) %>%  # Sort in ascending order
+    mutate(rank = row_number())  # Rank starts at 1 for lowest closeness
+  
+  # View the dataframe
+  print(closeness_df)
+```
+
+```{r}
+#Prepare for visualization
+  V(g)$continent <- countrycode(V(g)$name, "iso2c", "continent")
+  V(g)$size <- 1 / V(g)$closeness * 10  # Node size based on influence
+  V(g)$color <- ifelse(V(g)$closeness == min(V(g)$closeness), "red", "black")  # Red outline for most influential
+  
+  #Visualize the network
+  ggraph(g, layout = "fr") +
+    geom_edge_link(aes(width = weight, color = weight), alpha = 0.8) +  # Edge color based on weight
+    geom_node_point(aes(size = size, color = continent)) +  # Fully colored nodes
+    geom_node_text(aes(label = name), repel = TRUE, size = 3, color = "black") +  # Ensure text is readable
+    scale_edge_width(range = c(0.1, 2.5)) +
+    scale_edge_color_gradient(low = "lightgrey", high = "black") +  # Gradient from grey to black
+    scale_size_continuous(range = c(2, 10)) +
+    theme_void() +
+    theme(legend.position = "bottom") + 
+  
+   theme_void() +  
+    labs(title = "Global Music Network",
+         subtitle = "Tracking the spread of hit songs across countries based on first chart appearances") +
+    theme(
+      plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 12, hjust = 0.5),
+      legend.position = "right"
+    )
+```
+
+According to the graph analysis of the "Closeness Centrality" chart, Germany emerges as the most influential country in the global music network with the highest centrality (0.4104046), followed by Ecuador and Great Britain. This indicates that songs from these countries spread most efficiently throughout the global music ecosystem. Countries with higher values like Switzerland (ranked 20th) have less influence in the global music diffusion network.
+
+# References
